@@ -6,6 +6,9 @@ using System.Threading.Tasks;
 
 namespace VorbisEncode
 {
+    /// <summary>
+    /// Allows encoding of raw audio data to the Vorbis codec. Requires libvorbis.dll and libogg.dll
+    /// </summary>
     public partial class VorbisEncoder : IDisposable
     {
         // ogg and Vorbis structs used for encoding

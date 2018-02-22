@@ -158,7 +158,7 @@ namespace TestEncoding
             Console.WriteLine($"\nFinished encode for {file}\n");
         }
 
-        // We are testing, we don't care to check
+        // We are testing, we don't care to check if the wav file matches 16-bit 44100
         private static void IgnoreWavHeader(FileStream strim)
         {
             byte[] buf = new byte[10];
