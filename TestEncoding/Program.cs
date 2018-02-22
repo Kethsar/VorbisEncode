@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using VorbisEncode;
-using System.Threading.Tasks;
 
 namespace TestEncoding
 {
@@ -159,6 +158,7 @@ namespace TestEncoding
             Console.WriteLine($"\nFinished encode for {file}\n");
         }
 
+        // We are testing, we don't care to check
         private static void IgnoreWavHeader(FileStream strim)
         {
             byte[] buf = new byte[10];

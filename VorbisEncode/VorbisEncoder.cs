@@ -188,9 +188,9 @@ namespace VorbisEncode
                     }
                     else // mono
                     {
-                        for (i = 0; i < size; i++)
+                        for (i = 0; i < size / 2; i++)
                         {
-                            vab[0][i] = pcm_buf[i] / 32768f;
+                            vab[0][i] = (BitConverter.ToInt16(pcm_buf, i * 2) / 32768f);
                         }
                     }
                 }
