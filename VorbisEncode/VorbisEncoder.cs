@@ -1,20 +1,28 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace VorbisEncode
 {
     public partial class VorbisEncoder : IDisposable
     {
-        private ogg_stream_state os; /* take physical pages, weld into a logical stream of packets */
-        private ogg_page og; /* one Ogg bitstream page.  Vorbis packets are inside */
-        private ogg_packet op; /* one raw packet of data for decode */
+        private ogg_stream_state os; 
+        private ogg_page og;
+        private ogg_packet op; 
         private vorbis_info vi;
-        private vorbis_comment vc; /* struct that stores all the user comments */
+        private vorbis_comment vc; 
         private vorbis_block vb;
-        private vorbis_dsp_state vd; /* central working state for the packet->PCM decoder */
+        private vorbis_dsp_state vd; 
 
-        private Random rand;
+        private Random m_rand;
+        private bool m_bos; // Beginning of Stream
+        private bool m_first;
+        private Stream m_enc_stream;
+        private byte[] m_enc_buf;
+        private long m_readPos, m_writePos, m_stream_threshold;
+        private static object m_locker = new object();
 
         /// <summary>
         /// Initialize a new instance of the VorbisEncoder class in VBR mode,
@@ -22,8 +30,11 @@ namespace VorbisEncode
         /// </summary>
         public VorbisEncoder()
         {
-            rand = new Random();
+            m_rand = new Random();
             Mode = BitrateMode.VBR;
+            m_enc_stream = null;
+            m_bos = m_first = true;
+            m_readPos = m_writePos = 0;
         }
 
         /// <summary>
@@ -58,24 +69,21 @@ namespace VorbisEncode
             Dispose(false);
         }
 
-        public ogg_stream_state OggState { get { return os; } }
-        public ogg_page OggPage { get { return og; } }
-        public ogg_packet OggPacket { get { return op; } }
-        public vorbis_info VorbisInfo { get { return vi; } }
-        public vorbis_comment VorbisComment { get { return vc; } }
-        public vorbis_block VorbisBlock { get { return vb; } }
-        public vorbis_dsp_state VorbisDSPState { get { return vd; } }
-
         public int Bitrate { get; set; }
         public float Quality { get; set; }
         public int SampleRate { get; set; }
         public int Channels { get; set; }
         public int State { get; set; }
         public BitrateMode Mode { get; set; } 
+        public bool EOS { get; private set; }
+        public Dictionary<string, string> MetaData { get; set; }
 
         public int vorbis_enc_init(Dictionary<string, string> meta = null)
         {
             int ret = -1;
+            EOS = false;
+            m_bos = true;
+            m_first = false;
 
             /********** Encode setup ************/
 
@@ -114,7 +122,7 @@ namespace VorbisEncode
             /* set up our packet->stream encoder */
             /* pick a random serial number; that way we can more likely build
                chained streams just by concatenation */
-            ogg_stream_init(ref os, rand.Next());
+            ogg_stream_init(ref os, m_rand.Next());
             ogg_packet header = default(ogg_packet);
             ogg_packet header_comm = default(ogg_packet);
             ogg_packet header_code = default(ogg_packet);
@@ -133,25 +141,27 @@ namespace VorbisEncode
 
         public int vorbis_enc_encode(byte[] pcm_buf, byte[] enc_buf, int size)
         {
-            int i, result;
-            int eos = 0;
-            int w = 0;
+            int result;
+            int encoded_bytes = 0;
             
 
             /* This ensures the actual
              * audio data will start on a new page, as per spec
              */
-            while (eos == 0)
+            while (!EOS && m_bos)
             {
                 result = ogg_stream_flush(ref os, ref og);
 
                 if (result == 0)
+                {
+                    m_bos = false;
                     break;
+                }
                 
-                Marshal.Copy(og.header, enc_buf, w, og.header_len);
-                w += og.header_len;
-                Marshal.Copy(og.body, enc_buf, w, og.body_len);
-                w += og.body_len;
+                Marshal.Copy(og.header, enc_buf, encoded_bytes, og.header_len);
+                encoded_bytes += og.header_len;
+                Marshal.Copy(og.body, enc_buf, encoded_bytes, og.body_len);
+                encoded_bytes += og.body_len;
             }
 
 
@@ -161,6 +171,8 @@ namespace VorbisEncode
             }
             else
             {
+                int i;
+
                 unsafe
                 {
                     float** vab = (float**)(vorbis_analysis_buffer(ref vd, size).ToPointer());
@@ -183,6 +195,7 @@ namespace VorbisEncode
                     }
                 }
 
+                // Tell libvorbis how much data we actually wrote to the buffer
                 vorbis_analysis_wrote(ref vd, i);
             }
 
@@ -201,27 +214,26 @@ namespace VorbisEncode
                     ogg_stream_packetin(ref os, ref op);
 
                     /* write out pages (if any) */
-                    while (eos == 0)
+                    while (!EOS)
                     {
                         result = ogg_stream_pageout(ref os, ref og);
                         if (result == 0)
                             break;
                         
-                        Marshal.Copy(og.header, enc_buf, w, og.header_len);
-                        w += og.header_len;
-                        Marshal.Copy(og.body, enc_buf, w, og.body_len);
-                        w += og.body_len;
+                        Marshal.Copy(og.header, enc_buf, encoded_bytes, og.header_len);
+                        encoded_bytes += og.header_len;
+                        Marshal.Copy(og.body, enc_buf, encoded_bytes, og.body_len);
+                        encoded_bytes += og.body_len;
 
                         if (ogg_page_eos(ref og) != 0)
                         {
-                            eos = 1;
-                            os.e_o_s = 1;
+                            EOS = true;
                         }
                     }
                 }
             }
 
-            return w;
+            return encoded_bytes;
         }
 
         public void vorbis_enc_close()
@@ -234,6 +246,108 @@ namespace VorbisEncode
             vorbis_info_clear(ref vi);
         }
 
+        public void EncodeStream(Stream stdin, Stream stdout)
+        {
+            var audio_buf = new byte[SampleRate * 10];
+            m_enc_buf = new byte[SampleRate * 10];
+            int bytes_read, enc_bytes_read;
+
+            vorbis_enc_reinit(MetaData);
+            vorbis_enc_write_header();
+
+            while (!EOS)
+            {
+                bytes_read = stdin.Read(audio_buf, 0, audio_buf.Length);
+                enc_bytes_read = vorbis_enc_encode(audio_buf, m_enc_buf, bytes_read);
+
+                stdout.Write(m_enc_buf, 0, enc_bytes_read);
+                stdout.Flush();
+            }
+        }
+
+        public Task EncodeStreamAsync(Stream stdin, Stream stdout)
+        {
+            return Task.Run(() => EncodeStream(stdin, stdout));
+        }
+
+        public void PutBytes(byte[] audioBuffer, int count)
+        {
+            int enc_bytes_read = 0;
+
+            if (m_enc_buf == null)
+                m_enc_buf = new byte[SampleRate * 10];
+
+            if (m_enc_stream == null)
+            {
+                m_enc_stream = new MemoryStream();
+                m_stream_threshold = SampleRate * Channels * 10;
+            }
+
+            if (m_bos)
+            {
+                if (!m_first && !EOS)
+                {
+                    enc_bytes_read = vorbis_enc_encode(audioBuffer, m_enc_buf, 0);
+                    WriteToEncStream(m_enc_buf, enc_bytes_read);
+                }
+                
+                vorbis_enc_reinit(MetaData);
+                vorbis_enc_write_header();
+            }
+
+            enc_bytes_read = vorbis_enc_encode(audioBuffer, m_enc_buf, count);
+
+            WriteToEncStream(m_enc_buf, enc_bytes_read);
+        }
+
+        public int GetBytes(byte[] buffer, int count)
+        {
+            return ReadFromEncStream(buffer, count);
+        }
+
+        private void WriteToEncStream(byte[] enc_buf, int count)
+        {
+            lock (m_locker)
+            {
+                m_enc_stream.Position = m_writePos;
+                m_enc_stream.Write(enc_buf, 0, count);
+                m_enc_stream.Flush();
+                m_writePos = m_enc_stream.Position;
+            }
+        }
+
+        private int ReadFromEncStream(byte[] buffer, int count)
+        {
+            int read_bytes = 0;
+
+            lock (m_locker)
+            {
+                m_enc_stream.Position = m_readPos;
+                read_bytes = m_enc_stream.Read(buffer, 0, count);
+                m_readPos = m_enc_stream.Position;
+
+                if (m_readPos >= m_stream_threshold)
+                {
+                    var newStream = new MemoryStream();
+                    m_enc_stream.CopyTo(newStream);
+                    m_readPos = 0;
+                    m_writePos = newStream.Position;
+                    m_enc_stream = newStream;
+                }
+            }
+
+            return read_bytes;
+        }
+
+        public void ChangeMetaData(Dictionary<string, string> meta)
+        {
+            if (meta != null)
+            {
+                MetaData = meta;
+                m_bos = true;
+            }
+        }
+
         public void Dispose()
         {
             Dispose(true);
@@ -243,6 +357,15 @@ namespace VorbisEncode
         protected void Dispose(bool disposing)
         {
             vorbis_enc_close();
+
+            if(disposing)
+            {
+                if (m_enc_stream != null)
+                {
+                    m_enc_stream.Dispose();
+                    m_enc_stream = null;
+                }
+            }
         }
 
         public enum BitrateMode
