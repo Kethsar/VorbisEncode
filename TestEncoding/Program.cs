@@ -7,15 +7,26 @@ namespace TestEncoding
 {
     class Program
     {
+        const int SIZE = 1024 * 4;
+
         static void Main(string[] args)
         {
             var ve = new VorbisEncoder(2, 44100, 0.7f);
-            var files = new string[] { @"lsm.wav", @"unencoded.raw" };
+            var files = new string[] {"domdancehall.wav", @"lsm.wav", @"unencoded.raw" };
             var datas = new List<Dictionary<string, string>>();
             var cnt = 0;
-            var stdout = new FileStream("continuous.ogg", FileMode.Create, FileAccess.Write);
+            //var stdout = new FileStream("continuous.ogg", FileMode.Create, FileAccess.Write);
 
             var meta = new Dictionary<string, string>();
+            meta.Add("ARTIST", "Alstroemeria Records");
+            meta.Add("TITLE", "DOMINATED DANCEHALL");
+            meta.Add("ALBUM", "DOMINATED DANCEHALL");
+            meta.Add("DATE", "2014");
+            meta.Add("ENCODER", "Kethsar");
+
+            datas.Add(meta);
+
+            meta = new Dictionary<string, string>();
             meta.Add("ARTIST", "Lite Show Magic");
             meta.Add("TITLE", "We Are LSM");
             meta.Add("ALBUM", "We are \"Lite Show Magic\"");
@@ -33,25 +44,36 @@ namespace TestEncoding
 
             datas.Add(meta);
 
+            for (int i = 0; i < 200; i++)
+            {
+                Console.WriteLine($"\nByte In/Out {i+1}:\n");
+                ve = new VorbisEncoder(2, 44100, 0.7f);
+                ByteInOutExample(ve, datas[1], files[1]);
+                Console.WriteLine($"{GC.GetTotalMemory(false) / 1024 / 1024}MB allocated");
+            }
+
+            /*
             foreach (var file in files)
             {
+                Console.WriteLine("\nByte In/Out example:\n");
+                ByteInOutExample(ve, datas[cnt], file);
+
                 Console.WriteLine("\nEncode Stream example:\n");
                 EncodeStreamExample(ve, datas[cnt], file);
 
                 Console.WriteLine("\nEncode Stream Async example:\n");
                 EncodeStreamAsyncExample(ve, datas[cnt], file);
 
-                Console.WriteLine("\nByte In/Out example:\n");
-                ByteInOutExample(ve, datas[cnt], file);
-
                 Console.WriteLine("\nEncode Continuous Stream example:\n");
                 EncodeStreamContinuousExample(ve, datas[cnt], stdout, file);
 
                 cnt++;
             }
-
-            stdout.Dispose();
+            */
+            //stdout.Dispose();
             ve.Dispose();
+            GC.Collect();
+            Console.WriteLine($"{GC.GetTotalMemory(true) / 1024 / 1024}MB allocated");
 
             Console.WriteLine("Press any key to continue...");
             Console.ReadKey(true);
@@ -59,7 +81,7 @@ namespace TestEncoding
 
         private static void ByteInOutExample(VorbisEncoder ve, Dictionary<string, string> meta, string file)
         {
-            byte[] audio_buf = new byte[ve.SampleRate * 10], enc_buf = new byte[ve.SampleRate * 10];
+            byte[] audio_buf = new byte[SIZE], enc_buf = new byte[SIZE];
             var fi = file + "_byte-in-out.ogg";
             long bytes_written = 0;
             int bytes_read = 0;
@@ -76,7 +98,7 @@ namespace TestEncoding
 
                 do
                 {
-                    bytes_read = stdin.Read(audio_buf, 0, audio_buf.Length);
+                    bytes_read = stdin.Read(audio_buf, 0, SIZE);
                     ve.PutBytes(audio_buf, bytes_read);
 
                     var enc_bytes_read = ve.GetBytes(enc_buf, enc_buf.Length);

@@ -11,22 +11,34 @@ namespace VorbisEncode
     /// </summary>
     public partial class VorbisEncoder : IDisposable
     {
+        public const int DEFAULT_SAMPLES = 44100;
+        public const int DEFAULT_CHANNELS = 2;
+        public const float DEFAULT_QUALITY = 0.5f;
+
         // ogg and Vorbis structs used for encoding
-        private ogg_stream_state os; 
+        private ogg_stream_state os;
         private ogg_page og;
-        private ogg_packet op; 
+        private ogg_packet op;
         private vorbis_info vi;
-        private vorbis_comment vc; 
+        private vorbis_comment vc;
         private vorbis_block vb;
-        private vorbis_dsp_state vd; 
-        
+        private vorbis_dsp_state vd;
+
+        // What the fuck am I doing jesus christ
+        // The GC likes to move things around and cause Access Violation Exceptions. We are going to abuse GCHandles to not let that happen
+        private GCHandle osh;
+        private GCHandle ogh;
+        private GCHandle oph;
+        private GCHandle vih;
+        private GCHandle vch;
+        private GCHandle vbh;
+        private GCHandle vdh;
+
         private Random m_rand;
         private bool m_bos; // Beginning of Stream
         private bool m_first; // First encode with this object
-        private Stream m_encStream; // Being used as our buffer when using Put/Get Bytes 
+        private RingBuffer m_encRB; // Somewhere to store encoded data after PutBytes() is used
         private byte[] m_encBuf; // Byte buffer to retrieve the encoded data from libvorbis
-        private long m_readPos, m_writePos, m_streamThreshold; // Current read and write position, and the read threshold we re-make the stream buffer
-        private static object m_locker = new object();
 
         /// <summary>
         /// Initialize a new instance of the VorbisEncoder class in VBR mode,
@@ -36,9 +48,19 @@ namespace VorbisEncode
         {
             m_rand = new Random();
             Mode = BitrateMode.VBR;
-            m_encStream = null;
+            m_encRB = null;
             m_bos = m_first = true;
-            m_readPos = m_writePos = 0;
+            Channels = DEFAULT_CHANNELS;
+            SampleRate = DEFAULT_SAMPLES;
+            Quality = DEFAULT_QUALITY;
+
+            osh = GCHandle.Alloc(os, GCHandleType.Pinned);
+            ogh = GCHandle.Alloc(og, GCHandleType.Pinned);
+            oph = GCHandle.Alloc(op, GCHandleType.Pinned);
+            vih = GCHandle.Alloc(vi, GCHandleType.Pinned);
+            vch = GCHandle.Alloc(vc, GCHandleType.Pinned);
+            vbh = GCHandle.Alloc(vb, GCHandleType.Pinned);
+            vdh = GCHandle.Alloc(vd, GCHandleType.Pinned);
         }
 
         /// <summary>
@@ -68,6 +90,9 @@ namespace VorbisEncode
             Mode = BitrateMode.CBR;
         }
 
+        /// <summary>
+        /// Finalizer. Why does this need a summary?
+        /// </summary>
         ~VorbisEncoder()
         {
             Dispose(false);
@@ -125,30 +150,30 @@ namespace VorbisEncode
 
             /********** Encode setup ************/
 
-            vorbis_info_init(ref vi);
+            vorbis_info_init(vih.AddrOfPinnedObject());
 
             // Function called depends on whether we are doing a VBR or CBR stream
             if (Mode == BitrateMode.CBR)
-                ret = vorbis_encode_init(ref vi, Channels, SampleRate, Bitrate * 1000, Bitrate * 1000, Bitrate * 1000);
+                ret = vorbis_encode_init(vih.AddrOfPinnedObject(), Channels, SampleRate, Bitrate * 1000, Bitrate * 1000, Bitrate * 1000);
             else if (Mode == BitrateMode.VBR)
-                ret = vorbis_encode_init_vbr(ref vi, Channels, SampleRate, Quality);
+                ret = vorbis_encode_init_vbr(vih.AddrOfPinnedObject(), Channels, SampleRate, Quality);
 
             if (ret != 0) return ret;
 
             // add comments
-            vorbis_comment_init(ref vc);
+            vorbis_comment_init(vch.AddrOfPinnedObject());
 
             if (meta != null)
             {
                 foreach (var tag in meta.Keys)
                 {
-                    vorbis_comment_add_tag(ref vc, tag, meta[tag]);
+                    vorbis_comment_add_tag(vch.AddrOfPinnedObject(), tag, meta[tag]);
                 }
             }
 
             // set up the analysis state and auxiliary encoding storage
-            vorbis_analysis_init(ref vd, ref vi);
-            vorbis_block_init(ref vd, ref vb);
+            vorbis_analysis_init(vdh.AddrOfPinnedObject(), vih.AddrOfPinnedObject());
+            vorbis_block_init(vdh.AddrOfPinnedObject(), vbh.AddrOfPinnedObject());
 
             return 0;
         }
@@ -165,15 +190,15 @@ namespace VorbisEncode
             /* set up our packet->stream encoder */
             /* pick a random serial number; that way we can more likely build
                chained streams just by concatenation */
-            ogg_stream_init(ref os, m_rand.Next());
+            ogg_stream_init(osh.AddrOfPinnedObject(), m_rand.Next());
             ogg_packet header = default(ogg_packet);
             ogg_packet header_comm = default(ogg_packet);
             ogg_packet header_code = default(ogg_packet);
 
-            vorbis_analysis_headerout(ref vd, ref vc, ref header, ref header_comm, ref header_code);
-            ogg_stream_packetin(ref os, ref header); /* automatically placed in its own page */
-            ogg_stream_packetin(ref os, ref header_comm);
-            ogg_stream_packetin(ref os, ref header_code);
+            vorbis_analysis_headerout(vdh.AddrOfPinnedObject(), vch.AddrOfPinnedObject(), ref header, ref header_comm, ref header_code);
+            ogg_stream_packetin(osh.AddrOfPinnedObject(), ref header); /* automatically placed in its own page */
+            ogg_stream_packetin(osh.AddrOfPinnedObject(), ref header_comm);
+            ogg_stream_packetin(osh.AddrOfPinnedObject(), ref header_code);
         }
 
         /// <summary>
@@ -204,16 +229,19 @@ namespace VorbisEncode
              * audio data will start on a new page, as per spec
              */
             // Not EOS and is beginning of stream. Ensures we don't go through this block more than just the first call to this function for each new stream
-            while (!EOS && m_bos) 
+            while (!EOS && m_bos)
             {
-                result = ogg_stream_flush(ref os, ref og);
+                result = ogg_stream_flush(osh.AddrOfPinnedObject(), ogh.AddrOfPinnedObject());
+
+                // The original object the GCHandle was created for does not seem to update when the GCHandle address for it is used to manipulate the object
+                og = (ogg_page)ogh.Target;
 
                 if (result == 0)
                 {
                     m_bos = false;
                     break;
                 }
-                
+
                 Marshal.Copy(og.header, encBuffer, encoded_bytes, og.header_len);
                 encoded_bytes += og.header_len;
                 Marshal.Copy(og.body, encBuffer, encoded_bytes, og.body_len);
@@ -224,7 +252,7 @@ namespace VorbisEncode
             if (size == 0)
             {
                 // Let libvorbis prepare for end of stream
-                vorbis_analysis_wrote(ref vd, 0);
+                vorbis_analysis_wrote(vdh.AddrOfPinnedObject(), 0);
             }
             else
             {
@@ -233,7 +261,7 @@ namespace VorbisEncode
                 unsafe
                 {
                     // Get a buffer from libvorbis as a double float poiner
-                    float** vab = (float**)(vorbis_analysis_buffer(ref vd, size).ToPointer());
+                    float** vab = (float**)(vorbis_analysis_buffer(vdh.AddrOfPinnedObject(), size).ToPointer());
 
                     //deinterlace audio data and convert it from short to float
                     // We are dealing with bytes but audio samples are 16-bits, so convert each pair of bytes to a short, then to a float
@@ -255,37 +283,39 @@ namespace VorbisEncode
                 }
 
                 // Tell libvorbis how much data we actually wrote to the buffer
-                vorbis_analysis_wrote(ref vd, i);
+                vorbis_analysis_wrote(vdh.AddrOfPinnedObject(), i);
             }
 
-            while (vorbis_analysis_blockout(ref vd, ref vb) == 1)
+            while (vorbis_analysis_blockout(vdh.AddrOfPinnedObject(), vbh.AddrOfPinnedObject()) == 1)
             {
                 // When using a managed bitrate mode, a null pointer should be passed to vorbis_analysis
                 if (Mode == BitrateMode.CBR)
-                    vorbis_analysis(ref vb, IntPtr.Zero);
+                    vorbis_analysis(vbh.AddrOfPinnedObject(), IntPtr.Zero);
                 else
-                    vorbis_analysis(ref vb, ref op);
+                    vorbis_analysis(vbh.AddrOfPinnedObject(), oph.AddrOfPinnedObject());
 
-                vorbis_bitrate_addblock(ref vb);
+                vorbis_bitrate_addblock(vbh.AddrOfPinnedObject());
 
-                while (vorbis_bitrate_flushpacket(ref vd, ref op) != 0)
+                while (vorbis_bitrate_flushpacket(vdh.AddrOfPinnedObject(), oph.AddrOfPinnedObject()) != 0)
                 {
                     /* weld the packet into the bitstream */
-                    ogg_stream_packetin(ref os, ref op);
+                    ogg_stream_packetin(osh.AddrOfPinnedObject(), oph.AddrOfPinnedObject());
 
                     /* write out pages (if any) */
                     while (!EOS)
                     {
-                        result = ogg_stream_pageout(ref os, ref og);
+                        result = ogg_stream_pageout(osh.AddrOfPinnedObject(), ogh.AddrOfPinnedObject());
                         if (result == 0)
                             break;
-                        
+
+                        og = (ogg_page)ogh.Target;
+
                         Marshal.Copy(og.header, encBuffer, encoded_bytes, og.header_len);
                         encoded_bytes += og.header_len;
                         Marshal.Copy(og.body, encBuffer, encoded_bytes, og.body_len);
                         encoded_bytes += og.body_len;
 
-                        if (ogg_page_eos(ref og) != 0)
+                        if (ogg_page_eos(ogh.AddrOfPinnedObject()) != 0)
                         {
                             EOS = true;
                         }
@@ -302,11 +332,11 @@ namespace VorbisEncode
         public void Close()
         {
             // clean up. vorbis_info_clear() must be called last
-            ogg_stream_clear(ref os);
-            vorbis_block_clear(ref vb);
-            vorbis_dsp_clear(ref vd);
-            vorbis_comment_clear(ref vc);
-            vorbis_info_clear(ref vi);
+            ogg_stream_clear(osh.AddrOfPinnedObject());
+            vorbis_block_clear(vbh.AddrOfPinnedObject());
+            vorbis_dsp_clear(vdh.AddrOfPinnedObject());
+            vorbis_comment_clear(vch.AddrOfPinnedObject());
+            vorbis_info_clear(vih.AddrOfPinnedObject());
         }
 
         /// <summary>
@@ -363,10 +393,9 @@ namespace VorbisEncode
                 m_encBuf = new byte[SampleRate * 10];
 
             // Initialize our internal buffer in the form of a MemoryStream, and set the renew threshold
-            if (m_encStream == null)
+            if (m_encRB == null)
             {
-                m_encStream = new MemoryStream();
-                m_streamThreshold = SampleRate * Channels * 10;
+                m_encRB = new RingBuffer(count * Channels * 10);
             }
 
             // If beginning of stream, initialize the ogg/vorbis structs
@@ -376,16 +405,16 @@ namespace VorbisEncode
                 if (!m_first && !EOS)
                 {
                     enc_bytes_read = Encode(audioBuffer, m_encBuf, 0);
-                    WriteToEncStream(m_encBuf, enc_bytes_read);
+                    m_encRB.Write(m_encBuf, 0, enc_bytes_read);
                 }
-                
+
                 Reinit(MetaData);
                 WriteHeader();
             }
 
             // Encode data and write to our internal buffer
             enc_bytes_read = Encode(audioBuffer, m_encBuf, count);
-            WriteToEncStream(m_encBuf, enc_bytes_read);
+            m_encRB.Write(m_encBuf, 0, enc_bytes_read);
         }
 
         /// <summary>
@@ -400,47 +429,10 @@ namespace VorbisEncode
             int bytesRead = 0;
 
             // No sense trying to read from a null stream
-            if (m_encStream != null)
-                bytesRead = ReadFromEncStream(buffer, count);
+            if (m_encRB != null)
+                bytesRead = m_encRB.Read(buffer, 0, count);
 
             return bytesRead;
-        }
-
-        private void WriteToEncStream(byte[] enc_buf, int count)
-        {
-            // Lock all writes to our internal buffer so we don't write while we read
-            lock (m_locker)
-            {
-                m_encStream.Position = m_writePos;
-                m_encStream.Write(enc_buf, 0, count);
-                m_encStream.Flush();
-                m_writePos = m_encStream.Position;
-            }
-        }
-
-        private int ReadFromEncStream(byte[] buffer, int count)
-        {
-            int readBytes = 0;
-
-            // Lock all reads from our internal buffer so we don't read while we write
-            lock (m_locker)
-            {
-                m_encStream.Position = m_readPos;
-                readBytes = m_encStream.Read(buffer, 0, count);
-                m_readPos = m_encStream.Position;
-
-                // If we have read enough bytes, recreate the buffer to prevent it from growing too large
-                if (m_readPos >= m_streamThreshold)
-                {
-                    var newStream = new MemoryStream();
-                    m_encStream.CopyTo(newStream);
-                    m_readPos = 0;
-                    m_writePos = newStream.Position;
-                    m_encStream = newStream;
-                }
-            }
-
-            return readBytes;
         }
 
         /// <summary>
@@ -456,6 +448,23 @@ namespace VorbisEncode
             }
         }
 
+        /// <summary>
+        /// Create the internal buffer with the specified size.
+        /// Only useful when using <see cref="PutBytes(byte[], int)"/> and <see cref="GetBytes(byte[], int)"/>.
+        /// Must be called before <see cref="PutBytes(byte[], int)"/> for the first time, else it will have no effect, because fuck you I don't know how to code.
+        /// Default size if this is not called is 2x the count passed to <see cref="PutBytes(byte[], int)"/>
+        /// </summary>
+        /// <param name="size">The size of the buffer. Cannot be changed.</param>
+        public void SetInternalBufferSize(long size)
+        {
+            if (m_encRB == null)
+                m_encRB = new RingBuffer(size);
+        }
+
+        /// <summary>
+        /// Fully dispose of the ogg/vorbis structs and all GCHandles.
+        /// Obviously, you cannot continue to use this instance after this is called.
+        /// </summary>
         public void Dispose()
         {
             Dispose(true);
@@ -465,17 +474,18 @@ namespace VorbisEncode
         protected void Dispose(bool disposing)
         {
             Close();
-
-            if(disposing)
-            {
-                if (m_encStream != null)
-                {
-                    m_encStream.Dispose();
-                    m_encStream = null;
-                }
-            }
+            osh.Free();
+            ogh.Free();
+            oph.Free();
+            vih.Free();
+            vch.Free();
+            vbh.Free();
+            vdh.Free();
         }
 
+        /// <summary>
+        /// Types of bitrate modes for encoding
+        /// </summary>
         public enum BitrateMode
         {
             VBR,

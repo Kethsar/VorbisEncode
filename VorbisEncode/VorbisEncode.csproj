@@ -46,6 +46,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="OggVorbisFunctions.cs" />
+    <Compile Include="RingBuffer.cs" />
     <Compile Include="VorbisEncoder.cs" />
     <Compile Include="OggVorbisStructs.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
