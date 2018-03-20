@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using VorbisEncode;
+using System.Reflection;
 
 namespace TestEncoding
 {
@@ -9,23 +10,54 @@ namespace TestEncoding
     {
         const int SIZE = 1024 * 4;
 
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern IntPtr LoadLibrary(string dllToLoad);
+
         static void Main(string[] args)
         {
+            foreach (var arg in args)
+            {
+                if (arg.ToLower() == "make32")
+                {
+                    Make32();
+                    Environment.Exit(0);
+                }
+            }
+
+            string curPath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                   path32 = Path.Combine(curPath, "32"),
+                   path64 = Path.Combine(curPath, "64"),
+                   vorbis32 = Path.Combine(path32, "libvorbis.dll"),
+                   vorbis64 = Path.Combine(path64, "libvorbis.dll");
+
+            if (!File.Exists(vorbis32))
+            {
+                Directory.CreateDirectory(path32);
+                using (Stream instream = Assembly.GetExecutingAssembly().GetManifestResourceStream("TestEncoding.lib.libvorbis32.dll"),
+                              outstream = File.OpenWrite(vorbis32))
+                {
+                    instream.CopyTo(outstream);
+                }
+            }
+
+            if (!File.Exists(vorbis64))
+            {
+                Directory.CreateDirectory(path64);
+                using (Stream instream = Assembly.GetExecutingAssembly().GetManifestResourceStream("TestEncoding.lib.libvorbis64.dll"),
+                              outstream = File.OpenWrite(vorbis64))
+                {
+                    instream.CopyTo(outstream);
+                }
+            }
+
+            if (Environment.Is64BitProcess) LoadLibrary(vorbis64);
+            else LoadLibrary(vorbis32);
+
             var ve = new VorbisEncoder(2, 44100, 0.7f);
-            var files = new string[] {"domdancehall.wav", @"lsm.wav", @"unencoded.raw" };
+            var files = new string[] { @"lsm.wav" };
             var datas = new List<Dictionary<string, string>>();
-            var cnt = 0;
-            //var stdout = new FileStream("continuous.ogg", FileMode.Create, FileAccess.Write);
 
             var meta = new Dictionary<string, string>();
-            meta.Add("ARTIST", "Alstroemeria Records");
-            meta.Add("TITLE", "DOMINATED DANCEHALL");
-            meta.Add("ALBUM", "DOMINATED DANCEHALL");
-            meta.Add("DATE", "2014");
-            meta.Add("ENCODER", "Kethsar");
-
-            datas.Add(meta);
-
             meta = new Dictionary<string, string>();
             meta.Add("ARTIST", "Lite Show Magic");
             meta.Add("TITLE", "We Are LSM");
@@ -35,42 +67,14 @@ namespace TestEncoding
 
             datas.Add(meta);
 
-            meta = new Dictionary<string, string>();
-            meta.Add("ARTIST", "No idea");
-            meta.Add("TITLE", "I got this song from some sample code");
-            meta.Add("ALBUM", "seriously what");
-            meta.Add("DATE", "???");
-            meta.Add("ENCODER", "Kethsar");
-
-            datas.Add(meta);
-
-            for (int i = 0; i < 200; i++)
+            for (int i = 0; i < 2; i++)
             {
                 Console.WriteLine($"\nByte In/Out {i+1}:\n");
                 ve = new VorbisEncoder(2, 44100, 0.7f);
-                ByteInOutExample(ve, datas[1], files[1]);
+                ByteInOutExample(ve, datas[0], files[0]);
                 Console.WriteLine($"{GC.GetTotalMemory(false) / 1024 / 1024}MB allocated");
             }
 
-            /*
-            foreach (var file in files)
-            {
-                Console.WriteLine("\nByte In/Out example:\n");
-                ByteInOutExample(ve, datas[cnt], file);
-
-                Console.WriteLine("\nEncode Stream example:\n");
-                EncodeStreamExample(ve, datas[cnt], file);
-
-                Console.WriteLine("\nEncode Stream Async example:\n");
-                EncodeStreamAsyncExample(ve, datas[cnt], file);
-
-                Console.WriteLine("\nEncode Continuous Stream example:\n");
-                EncodeStreamContinuousExample(ve, datas[cnt], stdout, file);
-
-                cnt++;
-            }
-            */
-            //stdout.Dispose();
             ve.Dispose();
             GC.Collect();
             Console.WriteLine($"{GC.GetTotalMemory(true) / 1024 / 1024}MB allocated");
@@ -78,6 +82,34 @@ namespace TestEncoding
             Console.WriteLine("Press any key to continue...");
             Console.ReadKey(true);
         }
+
+        // For creating a 32-bit only exe to test with
+        // Code courtesy of ed @ rizon
+        private static void Make32()
+        {
+            string fo = Assembly.GetExecutingAssembly().Location;
+            using (FileStream i = new FileStream(fo, FileMode.Open, FileAccess.Read))
+            {
+                fo = fo.Substring(0, fo.LastIndexOf('.')) + "32.exe";
+                using (FileStream o = new FileStream(fo, FileMode.Create))
+                {
+                    bool first = true;
+                    byte[] buf = new byte[8192];
+                    while (true)
+                    {
+                        int n = i.Read(buf, 0, buf.Length);
+                        if (first)
+                        {
+                            first = false;
+                            buf[0x218] = 3; //1=any
+                        }
+                        if (n <= 0) break;
+                        o.Write(buf, 0, n);
+                    }
+                }
+            }
+        }
+
 
         private static void ByteInOutExample(VorbisEncoder ve, Dictionary<string, string> meta, string file)
         {
