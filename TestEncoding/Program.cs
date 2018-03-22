@@ -67,7 +67,7 @@ namespace TestEncoding
 
             datas.Add(meta);
 
-            for (int i = 0; i < 20; i++)
+            for (int i = 0; i < 2; i++)
             {
                 Console.WriteLine($"\nByte In/Out {i+1}:\n");
                 ves = new VorbisEncoderStream(2, 44100, 0.7f);

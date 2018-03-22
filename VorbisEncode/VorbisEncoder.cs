@@ -380,7 +380,10 @@ namespace VorbisEncode
         /// <returns></returns>
         public Task EncodeStreamAsync(Stream stdin, Stream stdout)
         {
-            return Task.Run(() => EncodeStream(stdin, stdout));
+            return Task.Factory.StartNew(() => EncodeStream(stdin, stdout),
+                System.Threading.CancellationToken.None,
+                TaskCreationOptions.None,
+                TaskScheduler.Default);
         }
 
         /// <summary>
