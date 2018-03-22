@@ -1,14 +1,10 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace VorbisEncode
 {
     public class RingBuffer
     {
-        private object locker = new object();
+        private readonly object m_lock = new object();
         private byte[] m_buffer;
 
         public RingBuffer (long size)
@@ -23,9 +19,11 @@ namespace VorbisEncode
 
         public void Write(byte[] buffer, int offset, int count)
         {
-            lock (locker)
+            if (count <= 0) return;
+
+            lock (m_lock)
             {
-                if (GetSpaceLeft() >= count && count > 0)
+                if (CanWrite(count))
                 {
                     for (int i = 0; i < count; i++)
                     {
@@ -36,6 +34,8 @@ namespace VorbisEncode
                     if (Head == Tail)
                         Tail = (Tail + 1) % Size;
                 }
+                else
+                    throw new Exception("Buffer too full");
             }
         }
 
@@ -45,7 +45,7 @@ namespace VorbisEncode
 
             if (!IsEmpty())
             {
-                lock (locker)
+                lock (m_lock)
                 {
                     for (int i = 0; i < count; i++)
                     {
@@ -68,18 +68,33 @@ namespace VorbisEncode
 
         public void Reset()
         {
-            lock (locker)
+            lock (m_lock)
                 Head = Tail;
         }
 
         public bool IsEmpty()
         {
-            return Head == Tail;
+            bool empty = false;
+
+            lock (m_lock)
+                empty = Head == Tail;
+
+            return empty;
         }
 
         public bool IsFull()
         {
-            return ((Head + 1) % Size) == Tail;
+            bool full = false;
+
+            lock (m_lock)
+                full = ((Head + 1) % Size) == Tail;
+
+            return full;
+        }
+
+        public bool CanWrite(int count)
+        {
+            return GetSpaceLeft() >= count;
         }
 
         public long GetSpaceLeft()

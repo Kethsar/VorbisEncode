@@ -67,7 +67,7 @@ namespace TestEncoding
 
             datas.Add(meta);
 
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < 5; i++)
             {
                 Console.WriteLine($"\nByte In/Out {i+1}:\n");
                 ves = new VorbisEncoderStream(2, 44100, 0.7f);
@@ -116,6 +116,7 @@ namespace TestEncoding
             var fi = file + "_byte-in-out.ogg";
             long bytes_written = 0;
             int bytes_read = 0;
+            bool going = true;
 
             Console.WriteLine($"Starting encode for {file} to {fi}");
 
@@ -126,21 +127,33 @@ namespace TestEncoding
                     IgnoreWavHeader(stdin);
 
                 ves.Encoder.ChangeMetaData(meta);
+                ves.Encoder.SetInternalBufferSize(ves.Encoder.SampleRate * 10);
+
+                // What the shit am I doing???
+                System.Threading.Thread tr = new System.Threading.Thread(new System.Threading.ThreadStart(() =>
+                {
+                    do
+                    {
+                        bytes_read = stdin.Read(audio_buf, 0, SIZE);
+                        ves.Write(audio_buf, 0, bytes_read);
+                    } while (bytes_read > 0);
+                }));
+
+                tr.Start();
 
                 do
                 {
-                    bytes_read = stdin.Read(audio_buf, 0, SIZE);
-                    ves.Write(audio_buf, 0, bytes_read);
-
                     var enc_bytes_read = ves.Read(enc_buf, 0, enc_buf.Length);
                     stdout.Write(enc_buf, 0, enc_bytes_read);
                     bytes_written += enc_bytes_read;
 
                     Console.Write($"\rKB Written: {(bytes_written / 1024.0):N2}");
-                } while (bytes_read > 0);
+
+                    going = (tr.ThreadState == System.Threading.ThreadState.Running || enc_bytes_read > 0);
+                } while (going);
             }
 
-            Console.WriteLine($"\nFinished encode for {file}\n");
+            Console.WriteLine($"\nFinished encode for {file}");
         }
 
 

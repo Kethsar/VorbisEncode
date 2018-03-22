@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Threading;
 
 namespace VorbisEncode
 {
@@ -9,6 +10,7 @@ namespace VorbisEncode
     public class VorbisEncoderStream : Stream, IDisposable
     {
         private VorbisEncoder m_ve;
+        private readonly object m_lock = new object();
 
         public VorbisEncoderStream()
         {
@@ -44,7 +46,7 @@ namespace VorbisEncode
         {
             get
             {
-                return true;
+                return m_ve.Buffer != null && !m_ve.Buffer.IsEmpty();
             }
         }
 
@@ -60,7 +62,7 @@ namespace VorbisEncode
         {
             get
             {
-                return true;
+                return m_ve.Buffer != null && !m_ve.Buffer.IsFull();
             }
         }
 
@@ -92,7 +94,20 @@ namespace VorbisEncode
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            return m_ve.GetBytes(buffer, offset, count);
+            int bytesRead = 0, lockwaits = 0;
+
+            lock (m_lock)
+            {
+                while (!CanRead && lockwaits < 10)
+                {
+                    lockwaits++;
+                    Monitor.Wait(m_lock, 1);
+                }
+
+                bytesRead = m_ve.GetBytes(buffer, offset, count);
+            }
+
+            return bytesRead;
         }
 
         public override long Seek(long offset, SeekOrigin origin)
@@ -107,7 +122,13 @@ namespace VorbisEncode
 
         public override void Write(byte[] buffer, int offset, int count)
         {
-            m_ve.PutBytes(buffer, offset, count);
+            lock (m_lock)
+            {
+                while (!m_ve.Buffer.CanWrite(count))
+                    Monitor.Wait(m_lock, 1);
+
+                m_ve.PutBytes(buffer, offset, count);
+            }
         }
 
         public void Dispose()
