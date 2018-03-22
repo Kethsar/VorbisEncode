@@ -62,7 +62,7 @@ namespace VorbisEncode
         {
             get
             {
-                return m_ve.Buffer != null && !m_ve.Buffer.IsFull();
+                return m_ve.Buffer == null || !m_ve.Buffer.IsFull(); // The buffer is created on the first attempt to write to it if it is still null
             }
         }
 
@@ -105,6 +105,8 @@ namespace VorbisEncode
                 }
 
                 bytesRead = m_ve.GetBytes(buffer, offset, count);
+
+                Monitor.PulseAll(m_lock);
             }
 
             return bytesRead;
@@ -124,7 +126,12 @@ namespace VorbisEncode
         {
             lock (m_lock)
             {
+                while (!CanWrite && !m_ve.Buffer.CanWrite(count))
+                    Monitor.Wait(m_lock, 1);
+
                 m_ve.PutBytes(buffer, offset, count);
+
+                Monitor.PulseAll(m_lock);
             }
         }
 
