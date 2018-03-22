@@ -134,6 +134,11 @@ namespace VorbisEncode
         public Dictionary<string, string> MetaData { get; set; }
 
         /// <summary>
+        /// Internal buffer
+        /// </summary>
+        public RingBuffer Buffer { get { return m_encRB; } }
+
+        /// <summary>
         /// Initialize all ogg and vorbis structs for encoding with the current settings.
         /// <see cref="Close"/> must be called first if you have already created a stream with this object and want to create another.
         /// <seealso cref="Reinit(Dictionary{string, string})"/>
@@ -380,11 +385,12 @@ namespace VorbisEncode
 
         /// <summary>
         /// Feed raw audio data to the encoder and output them to the internal buffer.
-        /// To be used with <see cref="GetBytes(byte[], int)"/> for retrieving the encoded data.
+        /// To be used with <see cref="GetBytes(byte[], int, int)"/> for retrieving the encoded data.
         /// </summary>
         /// <param name="audioBuffer">Array containing raw audio data.</param>
+        /// <param name="offset">Where in the byte array to start copying from</param>
         /// <param name="count">How many bytes of raw audio data to encode.</param>
-        public void PutBytes(byte[] audioBuffer, int count)
+        public void PutBytes(byte[] audioBuffer, int offset, int count)
         {
             int enc_bytes_read = 0;
 
@@ -405,7 +411,7 @@ namespace VorbisEncode
                 if (!m_first && !EOS)
                 {
                     enc_bytes_read = Encode(audioBuffer, m_encBuf, 0);
-                    m_encRB.Write(m_encBuf, 0, enc_bytes_read);
+                    m_encRB.Write(m_encBuf, offset, enc_bytes_read);
                 }
 
                 Reinit(MetaData);
@@ -414,23 +420,24 @@ namespace VorbisEncode
 
             // Encode data and write to our internal buffer
             enc_bytes_read = Encode(audioBuffer, m_encBuf, count);
-            m_encRB.Write(m_encBuf, 0, enc_bytes_read);
+            m_encRB.Write(m_encBuf, offset, enc_bytes_read);
         }
 
         /// <summary>
         /// Retrieve encoded audio data from the internal buffer.
-        /// To be used with <see cref="PutBytes(byte[], int)"/> to encode raw data.
+        /// To be used with <see cref="PutBytes(byte[], int, int)"/> to encode raw data.
         /// </summary>
         /// <param name="buffer">Array to place encoded data into.</param>
+        /// <param name="offset">Where in the byte array to start copying to</param>
         /// <param name="count">How many bytes of data to read from the buffer.</param>
         /// <returns></returns>
-        public int GetBytes(byte[] buffer, int count)
+        public int GetBytes(byte[] buffer, int offset, int count)
         {
             int bytesRead = 0;
 
             // No sense trying to read from a null stream
             if (m_encRB != null)
-                bytesRead = m_encRB.Read(buffer, 0, count);
+                bytesRead = m_encRB.Read(buffer, offset, count);
 
             return bytesRead;
         }
@@ -450,9 +457,9 @@ namespace VorbisEncode
 
         /// <summary>
         /// Create the internal buffer with the specified size.
-        /// Only useful when using <see cref="PutBytes(byte[], int)"/> and <see cref="GetBytes(byte[], int)"/>.
-        /// Must be called before <see cref="PutBytes(byte[], int)"/> for the first time, else it will have no effect, because fuck you I don't know how to code.
-        /// Default size if this is not called is 2x the count passed to <see cref="PutBytes(byte[], int)"/>
+        /// Only useful when using <see cref="PutBytes(byte[], int, int)"/> and <see cref="GetBytes(byte[], int, int)"/>.
+        /// Must be called before <see cref="PutBytes(byte[], int, int)"/> for the first time, else it will have no effect, because fuck you I don't know how to code.
+        /// Default size if this is not called is 2x the count passed to <see cref="PutBytes(byte[], int, int)"/>
         /// </summary>
         /// <param name="size">The size of the buffer. Cannot be changed.</param>
         public void SetInternalBufferSize(long size)
