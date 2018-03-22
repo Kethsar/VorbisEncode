@@ -127,7 +127,6 @@ namespace TestEncoding
                     IgnoreWavHeader(stdin);
 
                 ves.Encoder.ChangeMetaData(meta);
-                ves.Encoder.SetInternalBufferSize(ves.Encoder.SampleRate * 10);
 
                 // What the shit am I doing???
                 System.Threading.Thread tr = new System.Threading.Thread(new System.Threading.ThreadStart(() =>

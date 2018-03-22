@@ -404,7 +404,7 @@ namespace VorbisEncode
             // Initialize our internal buffer in the form of a MemoryStream, and set the renew threshold
             if (m_encRB == null)
             {
-                m_encRB = new RingBuffer(count * Channels * 10);
+                m_encRB = new RingBuffer(SampleRate * Channels * 10);
             }
 
             // If beginning of stream, initialize the ogg/vorbis structs

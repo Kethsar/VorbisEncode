@@ -101,7 +101,7 @@ namespace VorbisEncode
                 while (!CanRead && lockwaits < 10)
                 {
                     lockwaits++;
-                    Monitor.Wait(m_lock, 1);
+                    Monitor.Wait(m_lock, 10);
                 }
 
                 bytesRead = m_ve.GetBytes(buffer, offset, count);
@@ -124,9 +124,6 @@ namespace VorbisEncode
         {
             lock (m_lock)
             {
-                while (!m_ve.Buffer.CanWrite(count))
-                    Monitor.Wait(m_lock, 1);
-
                 m_ve.PutBytes(buffer, offset, count);
             }
         }
