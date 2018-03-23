@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using VorbisEncode;
 using System.Reflection;
+using System.Text;
 
 namespace TestEncoding
 {
@@ -53,7 +54,7 @@ namespace TestEncoding
             if (Environment.Is64BitProcess) LoadLibrary(vorbis64);
             else LoadLibrary(vorbis32);
 
-            VorbisEncoderStream ves = new VorbisEncoderStream(2, 44100, 0.7f);
+            VorbisEncoder ve = new VorbisEncoder(2, 44100, 0.7f);
             var files = new string[] { @"lsm.wav" };
             var datas = new List<Dictionary<string, string>>();
 
@@ -67,15 +68,15 @@ namespace TestEncoding
 
             datas.Add(meta);
 
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 2; i++)
             {
                 Console.WriteLine($"\nByte In/Out {i+1}:\n");
-                ves = new VorbisEncoderStream(2, 44100, 0.7f);
-                VorbisEncoderStreamExample(ves, datas[0], files[0]);
+                ve = new VorbisEncoder(2, 44100, 0.7f);
+                ByteInOutExample(ve, datas[0], files[0]);
                 Console.WriteLine($"{GC.GetTotalMemory(false) / 1024 / 1024}MB allocated");
             }
 
-            ves.Dispose();
+            ve.Dispose();
             GC.Collect();
             Console.WriteLine($"{GC.GetTotalMemory(true) / 1024 / 1024}MB allocated");
 
@@ -109,52 +110,6 @@ namespace TestEncoding
                 }
             }
         }
-
-        private static void VorbisEncoderStreamExample(VorbisEncoderStream ves, Dictionary<string, string> meta, string file)
-        {
-            byte[] audio_buf = new byte[SIZE], enc_buf = new byte[SIZE];
-            var fi = file + "_byte-in-out.ogg";
-            long bytes_written = 0;
-            int bytes_read = 0;
-            bool going = true;
-
-            Console.WriteLine($"Starting encode for {file} to {fi}");
-
-            using (FileStream stdin = new FileStream(file, FileMode.Open, FileAccess.Read),
-                        stdout = new FileStream(fi, FileMode.Create, FileAccess.Write))
-            {
-                if (file.EndsWith("wav", StringComparison.CurrentCultureIgnoreCase))
-                    IgnoreWavHeader(stdin);
-
-                ves.Encoder.ChangeMetaData(meta);
-
-                // What the shit am I doing???
-                System.Threading.Thread tr = new System.Threading.Thread(new System.Threading.ThreadStart(() =>
-                {
-                    do
-                    {
-                        bytes_read = stdin.Read(audio_buf, 0, SIZE);
-                        ves.Write(audio_buf, 0, bytes_read);
-                    } while (bytes_read > 0);
-                }));
-
-                tr.Start();
-
-                do
-                {
-                    var enc_bytes_read = ves.Read(enc_buf, 0, enc_buf.Length);
-                    stdout.Write(enc_buf, 0, enc_bytes_read);
-                    bytes_written += enc_bytes_read;
-
-                    Console.Write($"\rKB Written: {(bytes_written / 1024.0):N2}");
-
-                    going = (tr.ThreadState == System.Threading.ThreadState.Running || enc_bytes_read > 0);
-                } while (going);
-            }
-
-            Console.WriteLine($"\nFinished encode for {file}");
-        }
-
 
         private static void ByteInOutExample(VorbisEncoder ve, Dictionary<string, string> meta, string file)
         {

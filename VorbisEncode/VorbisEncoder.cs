@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace VorbisEncode
@@ -47,12 +48,12 @@ namespace VorbisEncode
         public VorbisEncoder()
         {
             m_rand = new Random();
-            Mode = BitrateMode.VBR;
             m_encRB = null;
             m_bos = m_first = true;
             Channels = DEFAULT_CHANNELS;
             SampleRate = DEFAULT_SAMPLES;
             Quality = DEFAULT_QUALITY;
+            Mode = BitrateMode.VBR;
 
             osh = GCHandle.Alloc(os, GCHandleType.Pinned);
             ogh = GCHandle.Alloc(og, GCHandleType.Pinned);
@@ -172,7 +173,13 @@ namespace VorbisEncode
             {
                 foreach (var tag in meta.Keys)
                 {
-                    vorbis_comment_add_tag(vch.AddrOfPinnedObject(), tag, meta[tag]);
+                    var keyptr = StringToUTF8Ptr(tag);
+                    var valptr = StringToUTF8Ptr(meta[tag]);
+
+                    vorbis_comment_add_tag(vch.AddrOfPinnedObject(), keyptr, valptr);
+
+                    Marshal.FreeHGlobal(keyptr);
+                    Marshal.FreeHGlobal(valptr);
                 }
             }
 
@@ -181,6 +188,21 @@ namespace VorbisEncode
             vorbis_block_init(vdh.AddrOfPinnedObject(), vbh.AddrOfPinnedObject());
 
             return 0;
+        }
+
+        // C# strings are UTF-16, always. Vorbis expects UTF-8
+        // This is the bullshit needed to properly give it a UTF-8 string
+        private IntPtr StringToUTF8Ptr(string s)
+        {
+            IntPtr utf8Ptr;
+            var utf8Arr = Encoding.UTF8.GetBytes(s);
+            var utf8CArr = new byte[utf8Arr.Length + 1];
+
+            Array.Copy(utf8Arr, utf8CArr, utf8Arr.Length);
+            utf8Ptr = Marshal.AllocHGlobal(utf8CArr.Length);
+            Marshal.Copy(utf8CArr, 0, utf8Ptr, utf8CArr.Length);
+
+            return utf8Ptr;
         }
 
         //This function needs to be called before
@@ -462,7 +484,7 @@ namespace VorbisEncode
         /// Create the internal buffer with the specified size.
         /// Only useful when using <see cref="PutBytes(byte[], int, int)"/> and <see cref="GetBytes(byte[], int, int)"/>.
         /// Must be called before <see cref="PutBytes(byte[], int, int)"/> for the first time, else it will have no effect, because fuck you I don't know how to code.
-        /// Default size if this is not called is 2x the count passed to <see cref="PutBytes(byte[], int, int)"/>
+        /// Default size if this is not called is Samplerate * Channels * 10
         /// </summary>
         /// <param name="size">The size of the buffer. Cannot be changed.</param>
         public void SetInternalBufferSize(long size)

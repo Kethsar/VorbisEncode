@@ -58,6 +58,15 @@ namespace VorbisEncode
         /// <summary>
         /// 
         /// </summary>
+        /// <param name="vc">vorbis_comment</param>
+        /// <param name="tag">UTF-8 string as byte array</param>
+        /// <param name="contents">UTF-8 string as byte array</param>
+        [DllImport(VORBIS_DLL, CallingConvention = CallingConvention.Cdecl, EntryPoint = "vorbis_comment_add_tag")]
+        public static extern void vorbis_comment_add_tag(IntPtr vc, [In()] IntPtr tag, [In()] IntPtr contents);
+
+        /// <summary>
+        /// 
+        /// </summary>
         /// <param name="v">vorbis_dsp_state</param>
         /// <param name="vi">vorbis_info</param>
         /// <returns></returns>
