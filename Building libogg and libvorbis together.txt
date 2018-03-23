@@ -1,0 +1,19 @@
+Get vorbis source
+	AoTuV (recommended): http://www.geocities.jp/aoyoume/aotuv/source_code/libvorbis-aotuv_b6.03_2015.tar.bz2
+	Vanilla (latest libvorbis archive): https://ftp.osuosl.org/pub/xiph/releases/vorbis/
+	
+Get ogg source
+	https://ftp.osuosl.org/pub/xiph/releases/ogg/
+	
+Extract both sources to wherever you want
+Copy libogg/include/ogg/ to libvorbis/include/
+Copy bitwise.c and framing.c from libogg/src/ to libvorbis/lib/
+Open the appropriate Visual Studio solution from libvorbis/win32/
+Add the ogg header files (ogg.h, os_types.h) and source files (framing.c, bitwise.c) to the libvorbis project
+Right click the libvorbis project in the solution explorer, and open its properties
+Go to Linker -> Input
+Make sure Configuration and Platform at the top are set to All Configurations and All Platforms, respectively
+Remove libogg.lib; from the Additional Dependencies option and save
+Edit libvorbis/win32/vorbis.def and add all lines from libogg/win32/ogg.def except LIBRARY and EXPORTS
+Build libvorbis in Visual Studio for both Win32 and x64
+Built  files can be found in libvorbis/win32/{VS Version}/{Platform}/
