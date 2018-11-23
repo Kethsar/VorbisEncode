@@ -38,7 +38,6 @@ namespace VorbisEncode
         private Random m_rand;
         private bool m_bos; // Beginning of Stream
         private bool m_first; // First encode with this object
-        private RingBuffer m_encRB; // Somewhere to store encoded data after PutBytes() is used
         private byte[] m_encBuf; // Byte buffer to retrieve the encoded data from libvorbis
 
         /// <summary>
@@ -48,7 +47,7 @@ namespace VorbisEncode
         public VorbisEncoder()
         {
             m_rand = new Random();
-            m_encRB = null;
+            Buffer = null;
             m_bos = m_first = true;
             Channels = DEFAULT_CHANNELS;
             SampleRate = DEFAULT_SAMPLES;
@@ -137,7 +136,7 @@ namespace VorbisEncode
         /// <summary>
         /// Internal buffer
         /// </summary>
-        public RingBuffer Buffer { get { return m_encRB; } }
+        public RingBuffer Buffer { get; private set; }
 
         /// <summary>
         /// Initialize all ogg and vorbis structs for encoding with the current settings.
@@ -424,9 +423,9 @@ namespace VorbisEncode
                 m_encBuf = new byte[SampleRate * 10];
 
             // Initialize our internal buffer in the form of a MemoryStream, and set the renew threshold
-            if (m_encRB == null)
+            if (Buffer == null)
             {
-                m_encRB = new RingBuffer(SampleRate * Channels * 10);
+                Buffer = new RingBuffer(SampleRate * Channels * 10);
             }
 
             // If beginning of stream, initialize the ogg/vorbis structs
@@ -436,7 +435,7 @@ namespace VorbisEncode
                 if (!m_first && !EOS)
                 {
                     enc_bytes_read = Encode(audioBuffer, m_encBuf, 0);
-                    m_encRB.Write(m_encBuf, offset, enc_bytes_read);
+                    Buffer.Write(m_encBuf, offset, enc_bytes_read);
                 }
 
                 Reinit(MetaData);
@@ -445,7 +444,7 @@ namespace VorbisEncode
 
             // Encode data and write to our internal buffer
             enc_bytes_read = Encode(audioBuffer, m_encBuf, count);
-            m_encRB.Write(m_encBuf, offset, enc_bytes_read);
+            Buffer.Write(m_encBuf, offset, enc_bytes_read);
         }
 
         /// <summary>
@@ -461,8 +460,8 @@ namespace VorbisEncode
             int bytesRead = 0;
 
             // No sense trying to read from a null stream
-            if (m_encRB != null)
-                bytesRead = m_encRB.Read(buffer, offset, count);
+            if (Buffer != null)
+                bytesRead = Buffer.Read(buffer, offset, count);
 
             return bytesRead;
         }
@@ -483,14 +482,15 @@ namespace VorbisEncode
         /// <summary>
         /// Create the internal buffer with the specified size.
         /// Only useful when using <see cref="PutBytes(byte[], int, int)"/> and <see cref="GetBytes(byte[], int, int)"/>.
-        /// Must be called before <see cref="PutBytes(byte[], int, int)"/> for the first time, else it will have no effect, because fuck you I don't know how to code.
         /// Default size if this is not called is Samplerate * Channels * 10
         /// </summary>
         /// <param name="size">The size of the buffer. Cannot be changed.</param>
         public void SetInternalBufferSize(long size)
         {
-            if (m_encRB == null)
-                m_encRB = new RingBuffer(size);
+            if (Buffer == null)
+                Buffer = new RingBuffer(size);
+            else
+                Buffer.Resize(size);
         }
 
         /// <summary>
